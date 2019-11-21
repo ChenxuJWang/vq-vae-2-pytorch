@@ -37,30 +37,35 @@ class Quantize(nn.Module):
         self.register_buffer('embed_avg', embed.clone())
 
     def forward(self, input):
+        # Flatten input
         flatten = input.reshape(-1, self.dim)
+        # Calculate distances
         dist = (
             flatten.pow(2).sum(1, keepdim=True)
             - 2 * flatten @ self.embed
             + self.embed.pow(2).sum(0, keepdim=True)
         )
+        # Encoding
         _, embed_ind = (-dist).max(1)
         embed_onehot = F.one_hot(embed_ind, self.n_embed).type(flatten.dtype)
         embed_ind = embed_ind.view(*input.shape[:-1])
         quantize = self.embed_code(embed_ind)
-
+        # Use EMA to update the embedding vectors
         if self.training:
             self.cluster_size.data.mul_(self.decay).add_(
                 1 - self.decay, embed_onehot.sum(0)
             )
             embed_sum = flatten.transpose(0, 1) @ embed_onehot
             self.embed_avg.data.mul_(self.decay).add_(1 - self.decay, embed_sum)
+            # Laplace smoothing of the cluster size
             n = self.cluster_size.sum()
             cluster_size = (
                 (self.cluster_size + self.eps) / (n + self.n_embed * self.eps) * n
             )
             embed_normalized = self.embed_avg / cluster_size.unsqueeze(0)
             self.embed.data.copy_(embed_normalized)
-
+        
+        # MSE Loss
         diff = (quantize.detach() - input).pow(2).mean()
         quantize = input + (quantize - input).detach()
 
@@ -158,7 +163,7 @@ class VQVAE(nn.Module):
     def __init__(
         self,
         in_channel=3,
-        channel=128,
+        channel= 128,
         n_res_block=2,
         n_res_channel=32,
         embed_dim=64,
@@ -197,7 +202,7 @@ class VQVAE(nn.Module):
     def encode(self, input):
         enc_b = self.enc_b(input)
         enc_t = self.enc_t(enc_b)
-
+#         why is this conv needed?
         quant_t = self.quantize_conv_t(enc_t).permute(0, 2, 3, 1)
         quant_t, diff_t, id_t = self.quantize_t(quant_t)
         quant_t = quant_t.permute(0, 3, 1, 2)
